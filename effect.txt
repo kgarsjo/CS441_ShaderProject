@@ -18,6 +18,9 @@
 static const float PI = 3.14159265f;
 float3 GrayFilter=float3(1.0, 0.7, 0.4);
 float3 pink= {0.82, 0.01, 0.89};
+float3 green= {0.16, 0.99, 0.01};
+float3 orange= {0.93, 0.64, 0.01};
+float3 teal= {0.01, 0.89, 0.99};
 float Brightness=0.8;
 float ClampLow=0.03;
 float ClampHigh=0.95;
@@ -142,6 +145,15 @@ float3 RGBtoHSV(in float3 RGB)
     return HSV;
 }
 
+float3 lerpColor(in float3 c1, in float3 c2, in float prd)
+{
+	float scale;
+	scale= (Timer.x % prd) / prd * (2*PI);
+	scale= abs( (sin(scale) / 2.0) + 0.5 );
+	
+	return lerp(c1, c2, scale);
+}
+
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -176,31 +188,51 @@ float4 PS_ProcessColor(VS_OUTPUT_POST IN, float2 vPos : VPOS) : COLOR
 	float4 coord=0.0;	// The coordinates of the current pixel (defaults to 0)
 	float fadeScale;	// The scale value for color fade based on the Timer
 	float gradScale;	// The scale value for gradient fade percentage
+	float gradBase;		// The base value for gradient fade percentage
+	float3 grad;		// The color to use during gradients
+	float3 topLeft;		// The color of the top-left screen corner
+	float3 topRight;	// The color of the top-right screen corner
+	float3 bottomLeft;	// The color of the bottom-left screen corner
+	float3 bottomRight;	// The color of the bottom-right screen corner
+	float3 topx;		// The intermediate value of top-x interpolation
+	float3 botx;		// The intermediate value of bottom-x interpolation
 	float3 ohsv;		// The HSV representation of the current pixel
 	float3 phsv;		// The HSV representation of the Pink color
 	float3 endval;		// The result vector for the current pixel
+	float xratio;		// The x coord normalized between 0 and 1
+	float yratio;		// The y coord normalized between 0 and 1
+	float switchPeriod;	// The period for switching color values on corners
 	
 	coord.xy=IN.txcoord.xy;
 	controlOrig= tex2Dlod(SamplerColor, coord);
 	orig= tex2Dlod(SamplerColor, coord);
+	xratio= vPos.x / ScreenSize.x;
+	yratio= vPos.y / (ScreenSize.x / ScreenSize.z);
 	
 	// Evaluate Scale values based on Timer and the Sine function
 	fadeScale= (Timer.x % period) / period * (2*PI);
 	fadeScale= abs( (sin(fadeScale) / 2.0) + 0.5 );
-	gradScale= 0.5;
+	gradScale= 0.99;
+	gradBase= 0.15;
+	switchPeriod= period * (2.0 / 3.0);
 	
-	// TODO Test lerp of RGB values (not HSV)
+	// Lerp the grad colors of all color vectors
+	topLeft= lerpColor(pink, orange, switchPeriod);
+	topRight= lerpColor(teal, green, switchPeriod);
+	bottomLeft= lerpColor(orange, pink, switchPeriod);
+	bottomRight= lerpColor(green, teal, switchPeriod);
+	topx= lerp(topLeft, topRight, xratio);
+	botx= lerp(bottomLeft, bottomRight, xratio);
+	grad= lerp(topx, botx, yratio);
 	
 	// Colorize the current pixel and store in endval
 	ohsv= RGBtoHSV(orig.xyz);
-	phsv= RGBtoHSV(pink);
+	phsv= RGBtoHSV(grad);
 	ohsv.x= phsv.x;
-	// TODO validate if it's cool
-	//ohsv.y= max(fadeScale, ohsv.y);
 	endval= HSVtoRGB(ohsv);
 	
 	// Interpolate original pixel and endval pixel
-	orig.xyz= lerp(orig.xyz, endval, fadeScale * gradScale);
+	orig.xyz= lerp(orig.xyz, endval, clamp(fadeScale * gradScale, gradBase, 1.0));
 
 	//scale
 	orig.xyz *= Brightness;
@@ -223,59 +255,6 @@ float4 PS_ProcessColor(VS_OUTPUT_POST IN, float2 vPos : VPOS) : COLOR
 	return res;
 }
 
-
-
-//2
-float4 PS_ProcessHorizontalBlur(VS_OUTPUT_POST IN, float2 vPos : VPOS) : COLOR
-{
-	float4 res;
-	float4 coord=0.0;
-
-	coord.xy=IN.txcoord.xy;
-
-	coord.w=0.0;
-
-	int i=0;
-
-	float4 tcol=0.0;
-	float2 invscreensize=ScreenSize.y;
-	float offset=-2.0;
-	for (i=0; i<5; i++)
-	{
-		coord.x=IN.txcoord.x+offset*invscreensize*BlurSamplingRange;
-		float4 ct=tex2Dlod(SamplerColor, coord);
-
-		tcol+=ct;
-		offset+=1.0;
-	}
-	res.xyz=tcol.xyz*0.2;
-
-	res.w=1.0;
-	return res;
-}
-
-
-
-//3
-float4 PS_ProcessScanlines(VS_OUTPUT_POST IN, float2 vPos : VPOS) : COLOR
-{
-	float4 res;
-	float4 coord=0.0;
-
-	coord.xy=IN.txcoord.xy;
-	float4 controlOrig;
-	coord.w=0.0;
-
-	coord.y=floor(coord.y*625.0)*0.0016;//625 vertical lines
-	res=tex2Dlod(SamplerColor, coord);
-
-	res.w=1.0;
-	return res;
-}
-
-
-
-
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -285,7 +264,7 @@ technique PostProcess
 	{
 		VertexShader = compile vs_3_0 VS_PostProcess();
 		PixelShader  = compile ps_3_0 PS_ProcessColor();
-
+		
 		DitherEnable=FALSE;
 		ZEnable=FALSE;
 		CullMode=NONE;
@@ -297,47 +276,5 @@ technique PostProcess
 		SRGBWRITEENABLE=FALSE;
 	}
 }
-
-#ifdef ESCANLINE
-technique PostProcess2
-{
-	pass P0
-	{
-
-		VertexShader = compile vs_3_0 VS_PostProcess();
-		PixelShader  = compile ps_3_0 PS_ProcessHorizontalBlur();
-
-		DitherEnable=FALSE;
-		ZEnable=FALSE;
-		CullMode=NONE;
-		ALPHATESTENABLE=FALSE;
-		SEPARATEALPHABLENDENABLE=FALSE;
-		AlphaBlendEnable=FALSE;
-		StencilEnable=FALSE;
-		FogEnable=FALSE;
-		SRGBWRITEENABLE=FALSE;
-	}
-}
-
-technique PostProcess3
-{
-	pass P0
-	{
-
-		VertexShader = compile vs_3_0 VS_PostProcess();
-		PixelShader  = compile ps_3_0 PS_ProcessScanlines();
-
-		DitherEnable=FALSE;
-		ZEnable=FALSE;
-		CullMode=NONE;
-		ALPHATESTENABLE=FALSE;
-		SEPARATEALPHABLENDENABLE=FALSE;
-		AlphaBlendEnable=FALSE;
-		StencilEnable=FALSE;
-		FogEnable=FALSE;
-		SRGBWRITEENABLE=FALSE;
-	}
-}
-#endif //ESCANLINE
 
 
