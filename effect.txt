@@ -163,6 +163,7 @@ VS_OUTPUT_POST VS_PostProcess(VS_INPUT_POST IN)
 //1
 float4 PS_ProcessColor(VS_OUTPUT_POST IN, float2 vPos : VPOS) : COLOR
 {
+	// Control defined for debugging purposes. Comment out to compile the intended effect.
 	//#define CONTROL
 	float4 res;
 	float4 coord=0.0;
@@ -172,20 +173,24 @@ float4 PS_ProcessColor(VS_OUTPUT_POST IN, float2 vPos : VPOS) : COLOR
 
 	//black-white filter
 	float4 orig= origcolor;
-	origcolor.xyz=dot(origcolor.xyz, GrayFilter.xyz);
+	//origcolor.xyz=dot(origcolor.xyz, GrayFilter.xyz);
 	
-	// TODO Test lerp of RGB values (not HSV)
-	
-	// Convert to HSV and fetch Scale value
-	float3 ohsv= RGBtoHSV(orig.xyz);
-	float3 phsv= RGBtoHSV(pink);
+	// Evaluate Scale value based on Timer and the Sine function
 	float scale= (Timer.x % period) / period * (2*PI);
 	scale= abs( sin(scale) );
 	
-	// Interpolate Hue
+	// TODO Test lerp of RGB values (not HSV)
+	
+	// Colorize the current pixel and store in endval
+	float3 ohsv= RGBtoHSV(orig.xyz);
+	float3 phsv= RGBtoHSV(pink);
+	ohsv.x= phsv.x;
+	float3 endval= HSVtoRGB(ohsv);
+	
+	// Interpolate original pixel and endval pixel
 	ohsv.x= lerp(ohsv.x, phsv.x, scale);
 	//orig.xyz= HSVtoRGB(ohsv);
-	orig.xyz= lerp(orig.xyz, pink, scale);
+	orig.xyz= lerp(orig.xyz, endval, scale);
 	
 	// Average (?) Saturation
 	ohsv.y= (ohsv.y + phsv.y) / 2;
