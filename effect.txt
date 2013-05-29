@@ -145,7 +145,10 @@ float3 RGBtoHSV(in float3 RGB)
     return HSV;
 }
 
-float3 lerpColor(in float3 c1, in float3 c2, in float prd)
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// Oscillate between the two given colors, with the supplied period
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+float3 oscillateColor(in float3 c1, in float3 c2, in float prd)
 {
 	float scale;
 	scale= (Timer.x % prd) / prd * (2*PI);
@@ -188,6 +191,7 @@ float4 PS_ProcessColor(VS_OUTPUT_POST IN, float2 vPos : VPOS) : COLOR
 	float4 coord=0.0;	// The coordinates of the current pixel (defaults to 0)
 	float fadeScale;	// The scale value for color fade based on the Timer
 	float gradScale;	// The scale value for gradient fade percentage
+	float pureScale;	// The scale value for sampling back in the pure color
 	float gradBase;		// The base value for gradient fade percentage
 	float3 grad;		// The color to use during gradients
 	float3 topLeft;		// The color of the top-left screen corner
@@ -213,14 +217,15 @@ float4 PS_ProcessColor(VS_OUTPUT_POST IN, float2 vPos : VPOS) : COLOR
 	fadeScale= (Timer.x % period) / period * (2*PI);
 	fadeScale= abs( (sin(fadeScale) / 2.0) + 0.5 );
 	gradScale= 0.99;
-	gradBase= 0.15;
+	pureScale= 0.25;
+	gradBase= 0.50;
 	switchPeriod= period * (2.0 / 3.0);
 	
 	// Lerp the grad colors of all color vectors
-	topLeft= lerpColor(pink, orange, switchPeriod);
-	topRight= lerpColor(teal, green, switchPeriod);
-	bottomLeft= lerpColor(orange, pink, switchPeriod);
-	bottomRight= lerpColor(green, teal, switchPeriod);
+	topLeft= oscillateColor(pink, green, switchPeriod);
+	topRight= oscillateColor(teal, orange, switchPeriod);
+	bottomLeft= oscillateColor(pink, green, switchPeriod);
+	bottomRight= oscillateColor(teal, orange, switchPeriod);
 	topx= lerp(topLeft, topRight, xratio);
 	botx= lerp(bottomLeft, bottomRight, xratio);
 	grad= lerp(topx, botx, yratio);
@@ -233,6 +238,9 @@ float4 PS_ProcessColor(VS_OUTPUT_POST IN, float2 vPos : VPOS) : COLOR
 	
 	// Interpolate original pixel and endval pixel
 	orig.xyz= lerp(orig.xyz, endval, clamp(fadeScale * gradScale, gradBase, 1.0));
+
+	// Sample back in the original color
+	orig.xyz= lerp(orig.xyz, grad, clamp(fadeScale * gradScale, 0.0, 1.0) * pureScale);
 
 	//scale
 	orig.xyz *= Brightness;
@@ -249,6 +257,50 @@ float4 PS_ProcessColor(VS_OUTPUT_POST IN, float2 vPos : VPOS) : COLOR
 		controlRes.w=1.0;
 		return controlRes;
 	#endif
+	
+	res.xyz= orig.xyz;
+	res.w= 1.0;
+	return res;
+}
+
+float4 PS_ProcessScanlines(VS_OUTPUT_POST IN, float2 vPos : VPOS) : COLOR
+{
+	float4 res;			// Return vector for the current pixel
+	float4 orig;		// Original vector for the current pixel
+	float4 noise;		// Noise vector for the current pixel
+	float4 coord= 0.0;	// The coordinates of the current pixel (defaults to 0)
+	float lineHeight;	// The height of an individual scanline
+	float winHeight;	// The height of the screen
+	float numLines;		// The number of scanlines to draw
+	float thisLine;		// The number corresponding to this line
+	float magicnum= 12500.0;
+	float3 ohsv;
+	float3 nhsv;
+	float3 endval;
+	
+	numLines= 600.0;
+	winHeight= ScreenSize.x / ScreenSize.z;
+	lineHeight= winHeight / numLines;
+	thisLine= ceil(vPos.y / lineHeight);
+	float lratio= thisLine / numLines;
+	
+	coord.xy=IN.txcoord.xy;
+	orig= tex2Dlod(SamplerColor, coord);
+	
+	// Sample noise based on this line number
+	coord.x= thisLine * (0.25) * magicnum * Timer.x;
+	coord.y= thisLine * magicnum * Timer.x;
+	noise= tex2D(SamplerNoise, coord);
+	noise= dot(noise, GrayFilter);
+	
+	// Convert to HSV and steal noise's saturation and value(base)
+	ohsv= RGBtoHSV(orig);
+	nhsv= RGBtoHSV(noise);
+	ohsv.z= clamp(nhsv.z, 0.0, 1.0);
+	endval= HSVtoRGB(ohsv);
+	
+	// Interpolate endval back into original color
+	orig.xyz= lerp(orig.xyz, endval, 0.135);
 	
 	res.xyz= orig.xyz;
 	res.w= 1.0;
@@ -275,6 +327,24 @@ technique PostProcess
 		FogEnable=FALSE;
 		SRGBWRITEENABLE=FALSE;
 	}
+	
 }
 
-
+technique PostProcess2
+{
+	pass P0
+	{
+		VertexShader = compile vs_3_0 VS_PostProcess();
+		PixelShader  = compile ps_3_0 PS_ProcessScanlines();
+		
+		DitherEnable=FALSE;
+		ZEnable=FALSE;
+		CullMode=NONE;
+		ALPHATESTENABLE=FALSE;
+		SEPARATEALPHABLENDENABLE=FALSE;
+		AlphaBlendEnable=FALSE;
+		StencilEnable=FALSE;
+		FogEnable=FALSE;
+		SRGBWRITEENABLE=FALSE;
+	}
+}
